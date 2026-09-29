@@ -80,8 +80,10 @@ async def dispatch_action(bot: "BotInstance", raw_action: str, params: dict) -> 
     try:
         return await handler(bot, params or {})
     except SendError as exc:
+        logger.warning("[%s] %s 失败 %s: %s", bot.appid, name, exc.retcode, exc.message)
         return failed(exc.retcode, exc.message)
     except QQApiError as exc:
+        logger.warning("[%s] %s 失败 qq api %s: %s", bot.appid, name, exc.code, exc.message)
         return failed(1500 if exc.status >= 500 else 1404,
                       f"qq api {exc.code}: {exc.message}")
     except Exception as exc:
