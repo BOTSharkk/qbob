@@ -1,0 +1,19 @@
+# 先在项目目录执行一次 `uv sync` 建好 .venv, 再复制到 /etc/systemd/system/qqbot-onebot.service,
+# 把 YOUR_USER 与 /path/to/qbob 换成实际值
+[Unit]
+Description=QQ official bot -> OneBot v11 adapter (qbob)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/path/to/qbob
+# 可选: BotShepherd 面板密码 BS_WEB_PASSWORD=...(600 权限, 不进代码/不进 unit)
+EnvironmentFile=-/path/to/qbob/data/bs.env
+ExecStart=/path/to/qbob/.venv/bin/python -m qqbot_onebot --config data/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

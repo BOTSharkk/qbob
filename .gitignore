@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+data/
+local/
+tests/
+qqbot_onebot/plugin/*
+!qqbot_onebot/plugin/__init__.py
+!qqbot_onebot/plugin/built-in/

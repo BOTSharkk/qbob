@@ -1,0 +1,44 @@
+{
+  "host": "127.0.0.1",
+  "port": 17800,
+  "admin_host": "127.0.0.1",
+  "admin_port": 17810,
+  "admin_on_public": true,
+  "http_api_host": "127.0.0.1",
+  "http_api_port": 17820,
+  "http_api_token": "",
+  "public_base_url": "",
+  "forward_base_url": "",
+  "root_redirect_url": "",
+  "token_urls": [
+    "https://api.bot.qq.com/app/getAppAccessToken",
+    "https://bots.qq.com/app/getAppAccessToken"
+  ],
+  "api_bases": [
+    "https://api.bot.qq.com",
+    "https://api.sgroup.qq.com"
+  ],
+  "db_path": "./data/qqbot_onebot.db",
+  "media_dir": "./data/media",
+  "media_ttl_hours": 1,
+  "message_ttl_days": 7,
+  "session_secret": "",
+  "log_level": "INFO",
+  "log_file": "./data/logs/qqbot.log",
+  "log_max_mb": 10,
+  "log_backups": 4,
+  "superusers": [],
+  "default_group_list_mode": "white",
+  "require_recv_all": true,
+  "ask_owner": true,
+  "recall_hint": true,
+  "default_bot": "",
+  "bot_groups": [
+    "默认"
+  ],
+  "default_bot_group": "默认",
+  "update_repo": "Loping151/qbob",
+  "update_mirror": "",
+  "update_check_hours": 6,
+  "seed_bots": []
+}
