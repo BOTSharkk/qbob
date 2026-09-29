@@ -39,10 +39,14 @@ class OneBotLink:
         self._connected_at: float = 0
         self._send_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=1000)
 
+    @property
+    def connected(self) -> bool:
+        return self._ws is not None
+
     def snapshot(self) -> dict:
         return {
             "url": self.url,
-            "connected": self._ws is not None,
+            "connected": self.connected,
             "connected_at": int(self._connected_at),
         }
 
@@ -63,6 +67,8 @@ class OneBotLink:
         while not self._closed:
             try:
                 await self._run_once()
+                if not self._closed:
+                    logger.info("[%s] disconnected from %s", self.bot.appid, self.url)
             except asyncio.CancelledError:
                 return
             except Exception as exc:

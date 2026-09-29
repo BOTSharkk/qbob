@@ -69,6 +69,8 @@ CREDENTIAL_DISABLE_AFTER = 3
 IDENTITY_REFRESH_INTERVAL = 3600
 # 未落库消息 id 的去重记忆(有界). 平台重推只在投递后几秒内; 落库的由 store.seen 兜.
 HANDLED_MSGS_MAX = 1024
+# 收到但没下发的消息, 同一会话同一原因多久记一次日志
+DROP_LOG_INTERVAL = 600
 # 开机补查未知状态群: 延后避开开机流量, 单轮上限防千群 bot 打爆接口
 STATE_SWEEP_DELAY = 30
 STATE_SWEEP_MAX = 50
@@ -279,6 +281,7 @@ class BotInstance:
         # 而 @ 消息的 GROUP_MESSAGE_CREATE 副本会被误判成"收到非 @ 消息".
         self._handled_msgs: deque[str] = deque(maxlen=HANDLED_MSGS_MAX)
         self._handled_set: set[str] = set()
+        self._drop_logged: dict[tuple[str, str], float] = {}
         self.me_info: dict = {}
         self.started = False
         # QQ 侧连通性: ws 模式看网关会话, webhook 模式看最近一次收到平台事件
@@ -718,9 +721,25 @@ class BotInstance:
         return str(virtual_qq)
 
     def broadcast(self, event: dict) -> None:
+        if not any(link.connected for link in self.links):
+            self.note_drop("后端", "没有已连接的 OneBot 后端, 事件丢弃"
+                           if self.links else "没配置 OneBot 后端, 事件丢弃")
+            return
         payload = json.dumps(event, ensure_ascii=False)
         for link in self.links:
             link.send_text(payload)
+
+    def note_drop(self, peer: str, reason: str) -> None:
+        """收到了但没下发给后端: 按会话+原因限频记一条, 便于排查「bot 不理人」."""
+        key = (peer, reason)
+        now = time.monotonic()
+        if now - self._drop_logged.get(key, -DROP_LOG_INTERVAL) < DROP_LOG_INTERVAL:
+            return
+        if len(self._drop_logged) > 4096:
+            self._drop_logged.clear()
+        self._drop_logged[key] = now
+        logger.info("[%s] %s 未下发: %s(%d 分钟内不再重复记录)",
+                    self.appid, peer, reason, DROP_LOG_INTERVAL // 60)
 
     async def emit(self, event: dict, raw: bool = True) -> None:
         """下发 OneBot 事件(消息事件先过 event_in 钩子); raw=True 时顺带透传原始事件.
@@ -1407,6 +1426,8 @@ class BotInstance:
         # 未启用的群不建映射不落库, 只放行内置指令(启用流程要用)和引用 bot 自己
         # 消息的(追问/撤回); 群友互引不算.
         if not self.peer_enabled("group", group_openid) and builtin is None and not await self._quotes_own_message(data):
+            if at_me:
+                self.note_drop(f"群 {group_openid[:12]}…", "群未启用, 被 @ 也不响应")
             return False
 
         group_virtual = await self.idmap.to_virtual(self.appid, "group", group_openid)
@@ -1458,6 +1479,7 @@ class BotInstance:
 
         # 已落库, 往后一律 return True
         if not await self._group_gate(group_openid, command_text):
+            self.note_drop(f"群 {group_virtual}", "群不合规(需开启主动消息/全量接收), 静默")
             return True
 
         quoted_mid = int(reply["data"]["id"]) if reply else 0
@@ -1477,10 +1499,11 @@ class BotInstance:
                 return True
 
         if not self.peer_enabled("group", group_openid):
+            self.note_drop(f"群 {group_virtual}", "群未启用")
             return True
         if self.quota_blocked("group", group_openid):
             # 日配额耗尽: 回了也发不出去, 不下发(见 core/quota.py)
-            logger.debug("[%s] %s 配额静默中, 不下发", self.appid, group_openid[:8])
+            self.note_drop(f"群 {group_virtual}", "主动消息配额用完, 静默中")
             return True
 
         await self.emit(ob_events.group_message_event(
@@ -1556,6 +1579,7 @@ class BotInstance:
                 return
 
         if not self.peer_enabled("private", user_openid):
+            self.note_drop(f"私聊 {user_virtual}", "用户在黑名单")
             return
 
         await self.emit(ob_events.private_message_event(

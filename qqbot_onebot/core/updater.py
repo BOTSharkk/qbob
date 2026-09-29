@@ -92,7 +92,7 @@ class Updater:
                 raise RuntimeError("没找到版本号")
             self.latest, self.error = match.group(1), ""
         except Exception as exc:        # noqa: BLE001
-            self.error = f"检查更新失败: {exc}"
+            self.error = f"检查更新失败: {exc or type(exc).__name__}"
             logger.info("%s (%s)", self.error, url)
         self.checked_at = int(time.time())
         return self.snapshot()

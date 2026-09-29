@@ -157,6 +157,16 @@ requestHeaders.set.x-forwarded-proto = "https"
 - 不要用 root 或其它高权限用户运行。
 - HTTP API 与透传默认只监听本机；改成对外监听前先想清楚谁能访问。
 
+## 排查问题
+
+日志在 `data/logs/qqbot.log`（systemd 下也可用 `journalctl -u qqbot-onebot`）。反馈问题时附上对应时间段的日志：
+
+- 发送失败：哪个 bot、哪个群/用户、retcode 与原因（如 QQ 拒收、被动回复窗口已过、配额用完）。
+- 收到了但没转给后端：群未启用、群不合规、配额静默、用户在黑名单、后端没连上。同一会话同一原因 10 分钟只记一次。
+- 后端连接的建立与断开、媒体直传、markdown 被拒后降级等。
+
+收发的消息本身在管理台「记录」里查。
+
 ## 更新
 
 服务每 `update_check_hours` 小时（默认 6）从 GitHub 读一次 `main` 分支的版本号，有新版本时管理台右上角出现
