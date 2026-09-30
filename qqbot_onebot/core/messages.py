@@ -139,6 +139,7 @@ class MessageStore:
         media_sizes: list[int] | None = None,
         batch_mid: int | None = None,
         batch_self: bool = False,
+        sent_text: str = "",
     ) -> int:
         """batch_self=True: 本行是批次首片, batch_mid 直接取自己的 mid."""
         mid = await self._alloc_mid()
@@ -147,8 +148,8 @@ class MessageStore:
         await self.db.execute(
             "INSERT INTO messages (mid, bot_appid, direction, chat_type, peer_openid,"
             " peer_virtual, user_virtual, qq_msg_id, msg_idx, content, sender, ts,"
-            " media_sizes, batch_mid)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " media_sizes, batch_mid, sent_text)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 mid, bot_appid, "out", chat_type, peer_openid, peer_virtual,
                 bot_virtual, qq_msg_id, msg_idx,
@@ -156,6 +157,7 @@ class MessageStore:
                 ts or int(time.time()),
                 json.dumps(media_sizes) if media_sizes else "",
                 batch_mid or 0,
+                sent_text,
             ),
         )
         return mid

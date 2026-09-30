@@ -59,13 +59,22 @@ CREATE TABLE IF NOT EXISTS messages (
     seq_used       INTEGER NOT NULL DEFAULT 0,
     media_sizes    TEXT NOT NULL DEFAULT '',    -- 外发媒体字节数(引用兜底匹配用)
     batch_mid      INTEGER NOT NULL DEFAULT 0,  -- 同一逻辑消息的分片共享首片 mid
-    recalled_at    INTEGER NOT NULL DEFAULT 0   -- 撤回时间(0=未撤回)
+    recalled_at    INTEGER NOT NULL DEFAULT 0,  -- 撤回时间(0=未撤回)
+    sent_text      TEXT NOT NULL DEFAULT ''     -- 外发实际发出的文字(插件改写后与 content 不同)
 );
 CREATE INDEX IF NOT EXISTS idx_msg_qqid ON messages (bot_appid, qq_msg_id);
 CREATE INDEX IF NOT EXISTS idx_msg_peer ON messages (bot_appid, chat_type, peer_openid, ts);
 CREATE INDEX IF NOT EXISTS idx_msg_ts ON messages (ts);
 -- 引用回复入站要按 msg_idx 反查(每条带引用的消息一次), 没索引就是全扫该 bot
 CREATE INDEX IF NOT EXISTS idx_msg_ref ON messages (bot_appid, msg_idx);
+-- 平台引用时可能换 idx: 按内容找回后把观测到的 idx 记成别名, 不覆盖消息本来的 idx
+CREATE TABLE IF NOT EXISTS msg_aliases (
+    bot_appid  TEXT NOT NULL,
+    msg_idx    TEXT NOT NULL,
+    mid        INTEGER NOT NULL,
+    ts         INTEGER NOT NULL,
+    PRIMARY KEY (bot_appid, msg_idx)
+);
 -- 撤回时取同一批的分片; 只有真被拆过的行有值, 部分索引足够
 CREATE INDEX IF NOT EXISTS idx_msg_batch ON messages (bot_appid, batch_mid)
     WHERE batch_mid != 0;
@@ -224,6 +233,8 @@ MIGRATIONS = [
     ("media_cache", "raw_until", "raw_until INTEGER NOT NULL DEFAULT 0"),
     ("bots", "passthrough_webhooks",
      "passthrough_webhooks TEXT NOT NULL DEFAULT '[]'"),
+    # 引用按内容找回时比对: 转发转网页等改写后, content 记的是原消息
+    ("messages", "sent_text", "sent_text TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -329,6 +340,9 @@ class Database:
         await self._delete_chunked(
             "DELETE FROM messages WHERE mid IN ("
             " SELECT mid FROM messages WHERE ts < ? LIMIT ?)", (cutoff,))
+        await self._delete_chunked(
+            "DELETE FROM msg_aliases WHERE rowid IN ("
+            " SELECT rowid FROM msg_aliases WHERE ts < ? LIMIT ?)", (cutoff,))
         # 合并转发内容随消息过期
         await self._delete_chunked(
             "DELETE FROM forwards WHERE id IN ("

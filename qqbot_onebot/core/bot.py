@@ -170,6 +170,9 @@ def _ark_link(ark: dict) -> str:
     return template.format(value) if value.isalnum() else ""
 
 
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\((https?://[^)\s]+)\)")
+
+
 def _find_link(node, depth: int = 0) -> str:
     """在 ARK 结构里找跳转链接(键名不固定, 递归找一层层嵌套的 fields)."""
     if depth > 4:
@@ -1103,14 +1106,11 @@ class BotInstance:
             return None
         elements = data.get("msg_elements")
         element = elements[0] if isinstance(elements, list) and elements else None
-        row = await self.db.fetchone(
-            "SELECT mid FROM messages WHERE bot_appid=? AND msg_idx=?",
-            (self.appid, ref_idx),
-        )
-        if row is not None:
+        found = await self._mid_by_idx(ref_idx)
+        if found is not None:
             if isinstance(element, dict):
-                await self._refresh_quoted_media(row["mid"], element)
-            return {"type": "reply", "data": {"id": str(row["mid"])}}
+                await self._refresh_quoted_media(found, element)
+            return {"type": "reply", "data": {"id": str(found)}}
 
         if not isinstance(element, dict):
             return None
@@ -1123,12 +1123,13 @@ class BotInstance:
 
         # 平台投递时可能换 idx(引用的引用是一次性 TMP_), 按内容特征在近期消息里找;
         # 否则落成 user_id=0 的影子记录, to_me/撤回都失效.
-        matched = await self._match_reply_fallback(chat_type, peer_openid, element)
+        matched, unique = await self._match_reply_fallback(chat_type, peer_openid, element)
         if matched is not None:
-            # 只有稳定的 REFIDX_ 才回写当别名
-            if ref_idx.startswith(_STABLE_IDX_PREFIX):
+            # 只有稳定的 REFIDX_ 且候选唯一才记别名; 不覆盖原 idx, 免得误配后永久指错
+            if unique and ref_idx.startswith(_STABLE_IDX_PREFIX):
                 await self.db.execute(
-                    "UPDATE messages SET msg_idx=? WHERE mid=?", (ref_idx, matched))
+                    "INSERT OR REPLACE INTO msg_aliases (bot_appid, msg_idx, mid, ts)"
+                    " VALUES (?,?,?,?)", (self.appid, ref_idx, matched, int(time.time())))
             logger.info("[%s] reply idx 未命中, 按内容特征归属到 mid=%s",
                         self.appid, matched)
             await self._refresh_quoted_media(matched, element)
@@ -1154,12 +1155,7 @@ class BotInstance:
         ref_idx = self._ext_value(data, "ref_msg_idx")
         if not ref_idx:
             return False
-        row = await self.db.fetchone(
-            "SELECT 1 FROM messages WHERE bot_appid=? AND msg_idx=?"
-            " AND direction='out'",
-            (self.appid, ref_idx),
-        )
-        if row is not None:
+        if await self._mid_by_idx(ref_idx, out_only=True) is not None:
             return True
         elements = data.get("msg_elements")
         element = elements[0] if isinstance(elements, list) and elements else None
@@ -1169,9 +1165,22 @@ class BotInstance:
         plain = unwrap_quote_blob(blob)
         if plain != blob:
             element = {**element, "content": plain}
-        matched = await self._match_reply_fallback(
+        matched, _ = await self._match_reply_fallback(
             "group", data.get("group_openid", ""), element, out_only=True)
         return matched is not None
+
+    async def _mid_by_idx(self, idx: str, out_only: bool = False) -> int | None:
+        """按引用 idx 找消息: 先认消息自己的 idx, 再认按内容找回时记下的别名."""
+        only = " AND direction='out'" if out_only else ""
+        row = await self.db.fetchone(
+            f"SELECT mid FROM messages WHERE bot_appid=? AND msg_idx=?{only}",
+            (self.appid, idx))
+        if row is None:
+            row = await self.db.fetchone(
+                "SELECT a.mid FROM msg_aliases a JOIN messages m ON m.mid=a.mid"
+                f" WHERE a.bot_appid=? AND a.msg_idx=?{only.replace('direction', 'm.direction')}",
+                (self.appid, idx))
+        return row["mid"] if row else None
 
     async def _refresh_quoted_media(self, mid: int, element: dict) -> None:
         """用引用 payload 里新签的 URL 替换原消息的过期链接.
@@ -1221,11 +1230,12 @@ class BotInstance:
     async def _match_reply_fallback(
         self, chat_type: str, peer_openid: str, element: dict,
         out_only: bool = False,
-    ) -> int | None:
+    ) -> tuple[int | None, bool]:
         """引用 idx 对不上时, 按内容特征在近 30 分钟的同会话消息里归属.
 
-        媒体按字节大小与外发的 media_sizes 求交, 文本要精确相等. 外发优先,
-        再退到入站; 取最近一条, 都不中返回 None.
+        媒体按字节大小与外发的 media_sizes 求交, 文本要精确相等(也比插件改写后
+        实际发出的文字). 外发优先, 再退到入站; 取最近一条.
+        返回 (mid, 是否唯一候选), 都不中为 (None, False).
         """
         text = str(element.get("content") or "").strip()
         sizes = set()
@@ -1236,16 +1246,18 @@ class BotInstance:
                 except (TypeError, ValueError):
                     pass
         if not text and not sizes:
-            return None
+            return None, False
         rows = await self.db.fetchall(
-            "SELECT mid, direction, content, media_sizes FROM messages"
+            "SELECT mid, direction, content, media_sizes, sent_text FROM messages"
             " WHERE bot_appid=? AND chat_type=? AND peer_openid=? AND ts>=?"
             # 影子记录不能当匹配目标
             " AND (direction='out' OR user_virtual!=0)"
             " ORDER BY mid DESC LIMIT 60",
             (self.appid, chat_type, peer_openid, int(time.time()) - 1800),
         )
-        fallback: int | None = None       # 入站命中: 外发都不中时才用
+        # 引用 markdown 消息时平台可能给原文: 链接写回纯文本发送时的「文字 网址」
+        texts = {text, _MD_LINK_RE.sub(r"\1 \2", text)} - {""}
+        hits: dict[str, list[int]] = {"out": [], "in": []}
         for row in rows:
             if out_only and row["direction"] != "out":
                 continue
@@ -1257,23 +1269,21 @@ class BotInstance:
                 except ValueError:
                     row_sizes = set()
                 hit = bool(sizes & row_sizes)
-            if not hit and text:
+            if not hit and texts:
                 try:
                     segs = json.loads(row["content"])
                 except ValueError:
-                    continue
+                    segs = []
                 row_text = "".join(
                     s.get("data", {}).get("text", "")
                     for s in segs if isinstance(s, dict) and s.get("type") == "text"
                 ).strip()
-                hit = bool(row_text) and row_text == text
-            if not hit:
-                continue
-            if row["direction"] == "out":
-                return row["mid"]
-            if fallback is None:
-                fallback = row["mid"]
-        return fallback
+                # 插件改写过的(转发转网页等), 记录的是原消息, 要比实际发出的文字
+                hit = bool(texts & ({row_text, str(row["sent_text"] or "").strip()} - {""}))
+            if hit:
+                hits["out" if row["direction"] == "out" else "in"].append(row["mid"])
+        picked = hits["out"] or hits["in"]
+        return (picked[0], len(picked) == 1) if picked else (None, False)
 
     async def _extra_segments(self, data: dict, qq_msg_id: str) -> list[dict]:
         """处理 content/attachments 之外的形态: 合并转发/引用/ARK 等; 落盘供补解析."""

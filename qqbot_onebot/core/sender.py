@@ -990,6 +990,7 @@ class Sender:
                     media_sizes=sizes,
                     batch_mid=first_mid,  # 同一逻辑消息的分片串在一起, 便于整体撤回
                     batch_self=first_mid is None,   # 首片指向自己, 免一次回写
+                    sent_text=_payload_text(payload),
                 )
                 if first_mid is None:
                     first_mid = mid
@@ -1104,7 +1105,7 @@ class Sender:
             self.bot.appid, chat_type, peer_openid, peer_virtual,
             self.bot.self_id, qq_id,
             [{"type": "text", "data": {"text": hint}}],
-            msg_idx=ref_idx, batch_mid=batch_mid,
+            msg_idx=ref_idx, batch_mid=batch_mid, sent_text=hint,
         )
 
     @staticmethod
@@ -1333,6 +1334,15 @@ class Sender:
         if chat_type == "group":
             return await self.bot.api.send_group_message(peer_openid, body)
         return await self.bot.api.send_c2c_message(peer_openid, body)
+
+
+def _payload_text(payload: dict) -> str:
+    """实际发出的文字; 引用 idx 对不上时靠它按内容找回(插件改写后与记录的原消息不同)."""
+    if payload.get("_plain_fallback") is not None:
+        return str(payload["_plain_fallback"])
+    if payload.get("msg_type") == 2:
+        return str((payload.get("markdown") or {}).get("content") or "")
+    return str(payload.get("content") or "")
 
 
 def _cdn_address(chat_type: str, upload: dict) -> str:
