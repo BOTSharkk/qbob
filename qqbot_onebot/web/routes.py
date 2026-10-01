@@ -890,7 +890,8 @@ def build_router() -> APIRouter:
         return {"options": {k: getattr(manager.config, k) for k in OPTION_FIELDS},
                 "update": updater.snapshot() if updater else {},
                 "bots": [{"appid": b.appid, "name": b.name, "self_id": b.self_id}
-                         for b in manager.bots.values()]}
+                         for b in manager.bots.values()],
+                "groups": list(manager.config.bot_groups)}
 
     @router.put("/options")
     async def put_options(request: Request, session: dict = require_role("admin")):
@@ -916,6 +917,9 @@ def build_router() -> APIRouter:
             updates[key] = value
         if updates.get("default_group_list_mode", "white") not in ("white", "black"):
             raise HTTPException(status_code=400, detail="default_group_list_mode 取值非法")
+        group = updates.get("default_bot_group")
+        if group is not None and group not in manager.config.bot_groups:
+            raise HTTPException(status_code=400, detail="分组不存在")
         for key, value in updates.items():
             setattr(manager.config, key, value)
         manager.config.save()

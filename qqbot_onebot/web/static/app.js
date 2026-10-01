@@ -2541,6 +2541,12 @@ async function renderOptions(main) {
           </select>
         </label>
         <p class="hint">HTTP API 不指定 bot 时用它</p>
+        <label>新 bot 的默认分组
+          <select name="default_bot_group"${d}>
+            ${(data.groups || []).map((g) => `<option value="${esc(g)}"${g === o.default_bot_group ? " selected" : ""}>${esc(g)}</option>`).join("")}
+          </select>
+        </label>
+        <p class="hint">新 bot（包括「创建bot」接入的）放进这个分组；建分组、改名在「Bot 管理 → 分组」</p>
       </section>
       <section class="help-card">
         <h3>更新</h3>
@@ -2569,6 +2575,7 @@ async function renderOptions(main) {
       ask_owner: form.ask_owner.checked,
       recall_hint: form.recall_hint.checked,
       default_bot: form.default_bot.value,
+      default_bot_group: form.default_bot_group.value,
       superusers: parseIdList(form.superusers.value),
     };
     try {

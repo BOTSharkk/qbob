@@ -117,7 +117,7 @@ class ServerConfig:
 # 管理台「选项」页可改的字段 -> 类型
 OPTION_FIELDS: dict[str, type] = {
     "superusers": list, "default_group_list_mode": str, "require_recv_all": bool,
-    "ask_owner": bool, "recall_hint": bool, "default_bot": str,
+    "ask_owner": bool, "recall_hint": bool, "default_bot": str, "default_bot_group": str,
 }
 # update_mirror 故意不在内: 它决定 git pull 的源, 只许改 config.json
 
