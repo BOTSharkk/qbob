@@ -48,20 +48,36 @@ RUN pip install --no-cache-dir \
 # 不需要安装进 site-packages。
 COPY . .
 
-# 关键补丁: 让 qbob 信任平台反代传来的 X-Forwarded-*。
+# ============================================================================
+# 关键补丁: 修掉"登录 POST 一律 403 / 前端显示权限不足"的问题
 #
-# 背景: qbob 默认 forwarded_allow_ips="127.0.0.1", 只信任来自本机回环的转发头。
-# 但 Zeabur 的反代在 Pod 网络里(如 10.42.x.x), 不是 127.0.0.1, 于是 uvicorn 忽略
-# X-Forwarded-Proto, request.url.scheme 永远是 http; 而浏览器 Origin 是
-# https://<域名>, 两者不等 => web/app.py 的 is_cross_site_write() 判定为跨站写请求
-# => 所有 POST(含登录 /api/login)一律 403, 前端显示"权限不足"。
+# 背景: qbob 的 web/app.py 有 CSRF 中间件 admin_security_headers, 它调用
+# is_cross_site_write() 比较"浏览器 Origin 的 scheme"和"应用自认的 scheme"。
+#   - qbob 默认 forwarded_allow_ips="127.0.0.1", 只信任本机回环来的 X-Forwarded-*
+#   - 但 Zeabur 的反代在 Pod 网络里(如 10.42.x.x), 不是 127.0.0.1
+#   - => uvicorn 忽略 X-Forwarded-Proto, request.url.scheme 恒为 http
+#   - 而浏览器 Origin 是 https://<域名> => https != http => 判定跨站 => 403
+#   - 登录路由本身不需要任何角色, 所以这个 403 只可能来自该中间件
 #
-# 放宽到 "*" 是安全的: 容器只经由平台反代接入, 并未直接对公网暴露。
-# grep 作为构建期断言 —— 若上游改了这行, sed 不匹配会让构建直接失败而不是静默失效。
+# 打两个补丁, 任一生效即可恢复登录; 两个都打是为了不依赖平台是否转发该头:
+#   补丁1 放宽反代信任范围, 让 scheme 能正确识别为 https(修根因)
+#   补丁2 去掉 scheme 比较, 只比 host 与 sec-fetch-site(对反代缺失该头免疫)
+#
+# 补丁2 的安全性: 跨站请求的 Origin 是攻击者域名, host 对不上照样被拦;
+# 且 sec-fetch-site == cross-site 的检查保持不变。同 host 的 http 页面无法被攻击者控制。
+#
+# 每个补丁后都跟 grep 断言: 上游若改了对应代码, 构建会直接失败(而不是静默失效)。
+# 构建日志里会出现 PATCH-OK-1 / PATCH-OK-2 两行, 可据此确认补丁确实应用了。
+# ============================================================================
 RUN sed -i 's/forwarded_allow_ips="127\.0\.0\.1"/forwarded_allow_ips="*"/' \
         qqbot_onebot/__main__.py \
     && grep -qF 'forwarded_allow_ips="*"' qqbot_onebot/__main__.py \
-    && echo "ok: forwarded_allow_ips 已放宽为 *"
+    && echo "PATCH-OK-1: forwarded_allow_ips 已放宽为 *" \
+    && sed -i 's/return parsed\.scheme != scheme or parsed\.netloc\.lower() != host\.lower()/return parsed.netloc.lower() != host.lower()/' \
+        qqbot_onebot/web/app.py \
+    && grep -qF 'return parsed.netloc.lower() != host.lower()' qqbot_onebot/web/app.py \
+    && ! grep -qF 'parsed.scheme != scheme' qqbot_onebot/web/app.py \
+    && echo "PATCH-OK-2: is_cross_site_write 已去掉 scheme 比较"
 
 # 数据目录。注意: 这里故意不写 `VOLUME` 指令 ——
 # Dockerfile 的 VOLUME 只是 Docker 层面的匿名卷标记, 不会在 Zeabur 上创建持久卷,
