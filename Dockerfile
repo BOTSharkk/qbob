@@ -48,9 +48,11 @@ RUN pip install --no-cache-dir \
 # 不需要安装进 site-packages。
 COPY . .
 
-# 所有运行数据(管理台密码 / bot 凭据 / 消息 / ID 映射)都在 /app/data, 必须挂持久卷
+# 数据目录。注意: 这里故意不写 `VOLUME` 指令 ——
+# Dockerfile 的 VOLUME 只是 Docker 层面的匿名卷标记, 不会在 Zeabur 上创建持久卷,
+# 反而容易让人误以为已经持久化了。持久化必须在 Zeabur 面板给本服务显式添加 Volume,
+# 挂载路径填 /app/data。
 RUN mkdir -p /app/data
-VOLUME ["/app/data"]
 
 # Zeabur 注入 PORT; 入口脚本把它写进 config.json 并监听 0.0.0.0
 CMD ["python", "scripts/zeabur-entrypoint.py"]
