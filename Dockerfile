@@ -48,6 +48,21 @@ RUN pip install --no-cache-dir \
 # 不需要安装进 site-packages。
 COPY . .
 
+# 关键补丁: 让 qbob 信任平台反代传来的 X-Forwarded-*。
+#
+# 背景: qbob 默认 forwarded_allow_ips="127.0.0.1", 只信任来自本机回环的转发头。
+# 但 Zeabur 的反代在 Pod 网络里(如 10.42.x.x), 不是 127.0.0.1, 于是 uvicorn 忽略
+# X-Forwarded-Proto, request.url.scheme 永远是 http; 而浏览器 Origin 是
+# https://<域名>, 两者不等 => web/app.py 的 is_cross_site_write() 判定为跨站写请求
+# => 所有 POST(含登录 /api/login)一律 403, 前端显示"权限不足"。
+#
+# 放宽到 "*" 是安全的: 容器只经由平台反代接入, 并未直接对公网暴露。
+# grep 作为构建期断言 —— 若上游改了这行, sed 不匹配会让构建直接失败而不是静默失效。
+RUN sed -i 's/forwarded_allow_ips="127\.0\.0\.1"/forwarded_allow_ips="*"/' \
+        qqbot_onebot/__main__.py \
+    && grep -qF 'forwarded_allow_ips="*"' qqbot_onebot/__main__.py \
+    && echo "ok: forwarded_allow_ips 已放宽为 *"
+
 # 数据目录。注意: 这里故意不写 `VOLUME` 指令 ——
 # Dockerfile 的 VOLUME 只是 Docker 层面的匿名卷标记, 不会在 Zeabur 上创建持久卷,
 # 反而容易让人误以为已经持久化了。持久化必须在 Zeabur 面板给本服务显式添加 Volume,
